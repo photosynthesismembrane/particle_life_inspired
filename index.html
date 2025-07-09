@@ -84,9 +84,9 @@ const texSize = Math.ceil(Math.sqrt(N));
 let TYPE_COUNT = 8;
 const UNIVERSAL_REPULSION = .000005;
 const INTERACTION_RANGE = .020;
-const FORCE_CONSTANT = 0.000001; // Default force constant for attraction/repulsion
+const FORCE_CONSTANT = 0.000005; // Default force constant for attraction/repulsion
 const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles around (0, 0)
-let particleSize = 6.0; // Default particle size
+let particleSize = 10.0; // Default particle size
 
 // --- Setup basic Three.js scene ---
 const context = document.getElementById('glcanvas').getContext('webgl1');
@@ -129,8 +129,8 @@ let data = new Float32Array(texSize * texSize * 4);
 for (let i = 0; i < N; i++) {
   const x = (i % texSize) / texSize;
   const y = Math.floor(i / texSize) / texSize;
-  data[i * 4] = Math.random() - .5; // x position
-  data[i * 4 + 1] = Math.random() - .5; // y position
+  data[i * 4] = Math.random()*2 - 1; // x position
+  data[i * 4 + 1] = Math.random()*2 - 1; // y position
   data[i * 4 + 2] = 0; // z position (not used)
   data[i * 4 + 3] = 0;
 }
