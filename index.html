@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Multi-Type Particle Simulation</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+
+    #matrixGrid {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #2c003e;
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      z-index: 10;
+    }
+    #matrixGrid table {
+      border-collapse: collapse;
+    }
+    #matrixGrid td {
+      border: 1px solid #666;
+      padding: 2px;
+    }
+    #matrixGrid input {
+      width: 50px;
+      background: #400060;
+      color: #fff;
+      border: 1px solid #888;
+    }
+    #matrixGrid button {
+      margin: 4px 2px;
+      padding: 2px 6px;
+      background: #600080;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+<div id="matrixGrid"></div>
+<canvas id="glcanvas"></canvas>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js';
+
+
+let N = 8000;
+const texSize = Math.ceil(Math.sqrt(N));
+let TYPE_COUNT = 8;
+const COLORS = [0xff5555, 0x55ff55, 0x5555ff, 0xffff55, 0x55ffff, 0xff55ff, 0xffffff]; // Default colors for different particle types
+const UNIVERSAL_REPULSION = .000005;
+const INTERACTION_RANGE = .020;
+const FORCE_CONSTANT = 0.000001; // Default force constant for attraction/repulsion
+const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles around (0, 0)
+let particleSize = 6.0; // Default particle size
+
+// --- Setup basic Three.js scene ---
+const context = document.getElementById('glcanvas').getContext('webgl2');
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('glcanvas'), context: context });
+
+renderer.setSize(window.innerWidth, window.innerHeight);
+// Set the clear color to a black background
+renderer.setClearColor(0x000000, 1.0);
+// renderer.setClearColor(0xffffff, 1.0);
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+camera.position.set(0, 0, 1);
+camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+// Create force matrix as a flat array for GPU computation
+const forceArray = new Float32Array(TYPE_COUNT * TYPE_COUNT);
+for (let i = 0; i < TYPE_COUNT; i++) {
+  for (let j = 0; j < TYPE_COUNT; j++) {
+    forceArray[i * TYPE_COUNT + j] = Math.random() * 2 - 1; // Random values between -1 and 1
+  }
+}
+// buildMatrixGrid();
+
+function createRenderTarget(width, height) {
+  return new THREE.WebGLRenderTarget(width, height, {
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.FloatType,
+    depthBuffer: false
+  });
+}
+
+let renderTarget1 = createRenderTarget(texSize, texSize);
+let renderTarget2 = createRenderTarget(texSize, texSize);
+
+// Initialize position texture with random positions
+let data = new Float32Array(texSize * texSize * 4);
+for (let i = 0; i < N; i++) {
+  const x = (i % texSize) / texSize;
+  const y = Math.floor(i / texSize) / texSize;
+  data[i * 4] = Math.random() - .5; // x position
+  data[i * 4 + 1] = Math.random() - .5; // y position
+  data[i * 4 + 2] = 0; // z position (not used)
+  data[i * 4 + 3] = 0;
+}
+let positionTexture = new THREE.DataTexture(data, texSize, texSize, THREE.RGBAFormat, THREE.FloatType);
+positionTexture.magFilter = THREE.NearestFilter;
+positionTexture.minFilter = THREE.NearestFilter;
+positionTexture.needsUpdate = true;
+
+// Create a color palette for the particles
+const palette = [
+  new THREE.Color(0xff5555),
+  new THREE.Color(0x55ff55),
+  new THREE.Color(0x5555ff),
+  new THREE.Color(0xffff55),
+  new THREE.Color(0x55ffff),
+  new THREE.Color(0xff55ff),
+  new THREE.Color(0xffffff)
+];
+const flattened = [];
+for (const c of palette) flattened.push(c.r, c.g, c.b);
+
+// --- Compute Shader ---
+const computeMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    positionTexture: { value: positionTexture },
+    forceArray: { value: forceArray },
+    texSize: { value: texSize },
+    palette: { value: new Float32Array(flattened) },
+    numTypes: { value: TYPE_COUNT },
+    numParticles: { value: N },
+    U: { value: UNIVERSAL_REPULSION },
+    R: { value: INTERACTION_RANGE },
+    C: { value: FORCE_CONSTANT },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+
+    uniform sampler2D positionTexture;
+    uniform float forceArray[64];
+    uniform float U;
+    uniform float R;
+    uniform float C;
+    uniform int texSize;
+    uniform vec3 palette[7];
+    uniform int numTypes;
+    uniform int numParticles;
+
+    in vec2 vUv;
+    out vec4 outColor;
+
+    void main() {
+      vec2 uvIndex = vUv * float(texSize);
+      int index = int(floor(uvIndex.y)) * texSize + int(floor(uvIndex.x));
+      ivec2 lookup = ivec2(int(mod(float(index), float(texSize))), int(floor(float(index) / float(texSize))));
+
+      vec4 posVel = texelFetch(positionTexture, lookup, 0);
+      vec3 color = palette[index % numTypes];
+
+      // Compute force...
+      vec2 forceSum = vec2(0.0000);
+      for (int j = 0; j < numParticles; j++) {
+        // forceSum += vec2(0.0001); // Initialize force sum
+        if (j == index) continue; // Skip self
+        int jx = j % texSize;
+        int jy = j / texSize;
+        vec4 other = texelFetch(positionTexture, ivec2(jx, jy), 0);
+
+        float d = length(other.xy - posVel.xy);
+        // forceSum += d * vec2(0.000001); // Example force, replace with actual logic
+
+
+        if (d == 0.000000) continue; // Avoid division by zero
+        float F = forceArray[(index % numTypes) * numTypes + (j % numTypes)];
+      //   if (f != f) continue; // NaN check for float
+        vec2 dir = normalize(other.xy - posVel.xy);
+      //   forceSum += ((-4.0 * (f + 0.5)) * d * d + (4.0 * f + 3.0) * d - 1.0) * dir;
+
+        float f = ((2.0 * (F + U)) / (R * R)) * d * d + ((-4.0 * (F + 0.5 * U)) / R) * d + U;
+        f *= exp(-d / R); // smooth, long-tail decay
+
+
+        forceSum += dir * C * f;
+
+        
+      }
+
+      vec2 velocity = posVel.zw;
+      velocity = velocity * 0.96 + forceSum; // Add inertia and damping
+      posVel.xy += velocity;
+      posVel.zw = velocity;
+
+
+      // Apply force
+      posVel.xy = posVel.xy + forceSum;
+
+      outColor = posVel;
+    }
+  `,
+  glslVersion: THREE.GLSL3,
+});
+
+const computeMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), computeMaterial);
+let computeScene = new THREE.Scene();
+computeScene.add(computeMesh);
+
+// Initialize UVs for final rendering
+const uvs = new Float32Array(N * 2);
+for (let i = 0; i < N; i++) {
+  const x = i % texSize;
+  const y = Math.floor(i / texSize);
+  uvs[i * 2] = x / texSize;
+  uvs[i * 2 + 1] = y / texSize;
+}
+
+let renderGeometry = new THREE.BufferGeometry();
+renderGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+renderGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); // dummy, not used
+
+// --- Display the texture in main scene ---
+const renderMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    positionTexture: { value: renderTarget1.texture },
+    texSize: { value: texSize },
+    palette: { value: new Float32Array(flattened) },
+    numTypes: { value: TYPE_COUNT },
+    particleSize: { value: particleSize },
+  },
+  vertexShader: `
+    precision highp float;
+    uniform sampler2D positionTexture;
+    uniform float texSize;
+    uniform vec3 palette[7];
+    uniform int numTypes;
+    uniform float particleSize;
+    varying vec3 vColor;
+
+    void main() {
+      vec2 uvIndex = uv * float(texSize);
+      int index = int(floor(uvIndex.y)) * int(texSize) + int(floor(uvIndex.x));
+      ivec2 lookup = ivec2(int(mod(float(index), float(texSize))), int(floor(float(index) / float(texSize))));
+
+      vec4 pos = texelFetch(positionTexture, lookup, 0);
+      vColor = palette[index % numTypes];
+
+      gl_Position = vec4(pos.xy, 0.0, 1.0);
+      gl_PointSize = particleSize;
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    varying vec3 vColor;
+
+    void main() {
+      pc_fragColor = vec4(vColor, 1.0);
+    }
+  `,
+});
+
+let renderPoints = new THREE.Points(renderGeometry, renderMaterial);
+const renderScene = new THREE.Scene();
+renderScene.add(renderPoints);
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // Run GPU computation
+  renderer.setRenderTarget(renderTarget1);
+  renderer.render(computeScene, camera);
+
+  // Console log 
+  // const stats = computeTextureStats(renderer, renderTarget1);
+  // console.log('Mean:', stats.mean);
+  // console.log('Variance:', stats.variance);
+
+  // Render the computed positions to the screen
+  renderMaterial.uniforms.positionTexture.value = renderTarget1.texture;
+  renderer.setRenderTarget(null);
+  renderer.render(renderScene, camera);
+
+  // Swap buffers
+  let temp = renderTarget2;
+  renderTarget2 = renderTarget1;
+  renderTarget1 = temp;
+
+  computeMaterial.uniforms.positionTexture.value = renderTarget2.texture;
+}
+
+animate();
+
+function computeTextureStats(renderer, renderTarget) {
+  const gl = renderer.getContext();
+  const width = renderTarget.width;
+  const height = renderTarget.height;
+
+  // Determine buffer type based on texture format
+  const textureType = renderTarget.texture.type;
+
+  const isFloat = textureType === THREE.FloatType || textureType === THREE.HalfFloatType;
+  const PixelArrayType = isFloat ? Float32Array : Uint8Array;
+
+  // Allocate buffer for pixels
+  const pixelBuffer = new PixelArrayType(width * height * 4);
+
+  // Bind the render target for reading
+  renderer.setRenderTarget(renderTarget);
+  gl.readPixels(0, 0, width, height, gl.RGBA, isFloat ? gl.FLOAT : gl.UNSIGNED_BYTE, pixelBuffer);
+  renderer.setRenderTarget(null); // Reset
+
+  // Compute mean and variance
+  const numPixels = width * height;
+  const sums = [0, 0, 0, 0];       // For R, G, B, A
+  const sumsSq = [0, 0, 0, 0];     // For variance
+
+  for (let i = 0; i < numPixels; i++) {
+    for (let c = 0; c < 4; c++) {
+      const value = pixelBuffer[i * 4 + c];
+      sums[c] += value;
+      sumsSq[c] += value * value;
+    }
+  }
+
+  const means = sums.map(sum => sum / numPixels);
+  const variances = sumsSq.map((sumSq, c) => (sumSq / numPixels) - (means[c] ** 2));
+
+  return {
+    mean: { r: means[0], g: means[1], b: means[2], a: means[3] },
+    variance: { r: variances[0], g: variances[1], b: variances[2], a: variances[3] }
+  };
+}
+
+
+// Build the GUI matrix grid with particle controls
+function buildMatrixGrid() {
+  const grid = document.getElementById('matrixGrid');
+  grid.innerHTML = '';
+  const table = document.createElement('table');
+
+  const header = document.createElement('tr');
+  const topLeft = document.createElement('td');
+  topLeft.textContent = '→↓';
+  header.appendChild(topLeft);
+  for (let j = 0; j < TYPE_COUNT; j++) {
+    const cell = document.createElement('td');
+    cell.textContent = j;
+    header.appendChild(cell);
+  }
+  table.appendChild(header);
+
+  for (let i = 0; i < TYPE_COUNT; i++) {
+    const row = document.createElement('tr');
+    const label = document.createElement('td');
+    label.textContent = i;
+    row.appendChild(label);
+    for (let j = 0; j < TYPE_COUNT; j++) {
+      const cell = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.01'; // Optional: allows precise decimal input
+      input.value = forceArray[i * TYPE_COUNT + j].toFixed(2);
+      input.onchange = (e) => {
+        forceArray[i * TYPE_COUNT + j] = parseFloat(e.target.value);
+      };
+      cell.appendChild(input);
+      row.appendChild(cell);
+    }
+    table.appendChild(row);
+  }
+
+  const controlRow = document.createElement('tr');
+  const controlCell = document.createElement('td');
+  controlCell.colSpan = TYPE_COUNT + 1;
+  controlCell.innerHTML = `Types: <input id="typeInput" type="number" value="${TYPE_COUNT}" style="width:40px;">
+    Particles: <input id="countInput" type="number" value="${N}" style="width:60px;">
+    Size: <input id="sizeInput" type="number" value="${particleSize}" style="width:40px;">
+    <button id="resetButton">Reset</button> <button id="randomizeButton">Randomize Forces</button>`;
+  table.appendChild(controlRow);
+  controlRow.appendChild(controlCell);
+
+  grid.appendChild(table);
+
+  document.getElementById('sizeInput').onchange = (e) => {
+    particleSize = parseInt(e.target.value);
+  };
+
+  document.getElementById('resetButton').onclick = () => {
+    resetParticles();
+  };
+
+  document.getElementById('randomizeButton').onclick = () => {
+    for (let i = 0; i < TYPE_COUNT; i++) {
+      for (let j = 0; j < TYPE_COUNT; j++) {
+        forceArray[i * TYPE_COUNT + j] = (Math.random()*2. - 1.);
+      }
+    }
+    buildMatrixGrid();
+    resetParticles();
+  };
+
+  document.getElementById('typeInput').onchange = (e) => {
+    TYPE_COUNT = parseInt(e.target.value);
+    initSimulation();
+  };
+
+  document.getElementById('countInput').onchange = (e) => {
+    N = parseInt(e.target.value);
+    initSimulation();
+  };
+}
+
+</script>
+</body>
+</html>
