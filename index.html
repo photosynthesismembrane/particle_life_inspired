@@ -219,6 +219,9 @@ const computeMaterial = new THREE.ShaderMaterial({
       posVel.xy += velocity;
       posVel.zw = velocity;
 
+      // Wrap around edges, with slight offset to avoid edge artifacts, wrap around [-1.1, 1.1]
+      posVel.xy = mod(posVel.xy + 1.1, 2.2) - 1.1;
+
       gl_FragColor = posVel;
     }
   `,
