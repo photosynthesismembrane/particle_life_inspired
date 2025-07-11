@@ -2,12 +2,34 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Multi-Type Particle Simulation</title>
+  <title>Particle Life</title>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #resetBtnUI {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background-color: #f5f1e1; /* soft cream */
+      color: #333;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-family: 'Segoe UI', sans-serif;
+      font-size: 14px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      cursor: pointer;
+      z-index: 1000;
+      transition: all 0.2s ease;
+    }
+    #resetBtnUI:hover {
+      background-color: #fff8dc;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    }
   </style>
 </head>
 <body>
+  <button id="resetBtnUI">Reset</button>
   <div id="errorOverlay" style="
     position: absolute;
     bottom: 0;
@@ -17,7 +39,7 @@
     overflow-y: auto;
     background: rgba(255, 0, 0, 0.9);
     color: white;
-    font-family: monospace;
+    font-family: 'Rubik', sans-serif;
     font-size: 12px;
     padding: 10px;
     display: none;
@@ -49,12 +71,7 @@ function isMobileDevice() {
 }
 
 let N = isMobileDevice() ? 6000 : 12000;
-
 const texSize = Math.ceil(Math.sqrt(N));
-let TYPE_COUNT = Math.floor(Math.random() * 7) + 2; // Random number of types between 2 and 8
-const UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
-const INTERACTION_RANGE = .040 * Math.random() + .040; // Default interaction range for attraction/repulsion
-const FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
 let particleSize = 10.0; // Default particle size
 
 // --- Setup basic Three.js scene ---
@@ -65,21 +82,10 @@ const context = document.getElementById('glcanvas').getContext('webgl2', { power
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('glcanvas'), context: context });
 
 renderer.setSize(window.innerWidth, window.innerHeight);
-// Set the clear color to a black background
 renderer.setClearColor(0x000000, 1.0);
-// renderer.setClearColor(0xffffff, 1.0);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.set(0, 0, 1);
 camera.lookAt(new THREE.Vector3(0, 0, 0));
-
-// Create force matrix as a flat array for GPU computation
-const forceArray = new Float32Array(TYPE_COUNT * TYPE_COUNT);
-for (let i = 0; i < TYPE_COUNT; i++) {
-  for (let j = 0; j < TYPE_COUNT; j++) {
-    forceArray[i * TYPE_COUNT + j] = Math.random() * 2 - 1; // Random values between -1 and 1
-  }
-}
-// buildMatrixGrid();
 
 function createRenderTarget(width, height) {
   return new THREE.WebGLRenderTarget(width, height, {
@@ -96,21 +102,6 @@ function createRenderTarget(width, height) {
 let renderTarget1 = createRenderTarget(texSize, texSize);
 let renderTarget2 = createRenderTarget(texSize, texSize);
 
-// Initialize position texture with random positions
-let data = new Float32Array(texSize * texSize * 4);
-for (let i = 0; i < N; i++) {
-  const x = (i % texSize) / texSize;
-  const y = Math.floor(i / texSize) / texSize;
-  data[i * 4] = Math.random()*2 - 1; // x position
-  data[i * 4 + 1] = Math.random()*2 - 1; // y position
-  data[i * 4 + 2] = 0; // z position (not used)
-  data[i * 4 + 3] = 0;
-}
-let positionTexture = new THREE.DataTexture(data, texSize, texSize, THREE.RGBAFormat, THREE.FloatType);
-positionTexture.magFilter = THREE.NearestFilter;
-positionTexture.minFilter = THREE.NearestFilter;
-positionTexture.needsUpdate = true;
-
 // Create a color palette for the particles
 const palette = [
   new THREE.Color('#f95db4'), // Pantone 812 C (Pink)
@@ -122,163 +113,203 @@ const palette = [
   new THREE.Color('#4b60d4'), // Pantone 2726 C (Blue)
   new THREE.Color('#a72cb1'), // Pantone 253 C (Purple)
 ];
-// Shuffle the palette
-palette.sort(() => Math.random() - 0.5);
-const flattened = [];
-for (const c of palette) flattened.push(c.r, c.g, c.b);
 
+// Globalize all settings
+let TYPE_COUNT, UNIVERSAL_REPULSION, INTERACTION_RANGE, FORCE_CONSTANT;
+let forceArray;
+let data, positionTexture;
+let flattened;
 // --- Compute Shader ---
-const computeMaterial = new THREE.ShaderMaterial({
-  uniforms: {
-    positionTexture: { value: positionTexture },
-    forceArray: { value: forceArray },
-    texSize: { value: texSize },
-    palette: { value: new Float32Array(flattened) },
-    numTypes: { value: TYPE_COUNT },
-    numParticles: { value: N },
-    U: { value: UNIVERSAL_REPULSION },
-    R: { value: INTERACTION_RANGE },
-    C: { value: FORCE_CONSTANT },
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+let computeMaterial, computeMesh, computeScene;
+let uvs, renderGeometry, renderMaterial, renderPoints, renderScene;
+
+function initialize() {
+  TYPE_COUNT = Math.floor(Math.random() * 7) + 2; // Random number of types between 2 and 8
+  UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
+  INTERACTION_RANGE = .040 * Math.random() + .040; // Default interaction range for attraction/repulsion
+  FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
+
+  // Create force matrix as a flat array for GPU computation
+  forceArray = new Float32Array(TYPE_COUNT * TYPE_COUNT);
+  for (let i = 0; i < TYPE_COUNT; i++) {
+    for (let j = 0; j < TYPE_COUNT; j++) {
+      forceArray[i * TYPE_COUNT + j] = Math.random() * 2 - 1; // Random values between -1 and 1
     }
-  `,
-  fragmentShader: `
-    precision highp float;
+  }
 
-    uniform sampler2D positionTexture;
-    uniform float forceArray[64];
-    uniform float U;
-    uniform float R;
-    uniform float C;
-    uniform int texSize;
-    uniform vec3 palette[7];
-    uniform int numTypes;
-    uniform int numParticles;
+  // Initialize position texture with random positions
+  data = new Float32Array(texSize * texSize * 4);
+  for (let i = 0; i < N; i++) {
+    const x = (i % texSize) / texSize;
+    const y = Math.floor(i / texSize) / texSize;
+    data[i * 4] = Math.random()*2 - 1; // x position
+    data[i * 4 + 1] = Math.random()*2 - 1; // y position
+    data[i * 4 + 2] = 0; // z position (not used)
+    data[i * 4 + 3] = 0;
+  }
+  positionTexture = new THREE.DataTexture(data, texSize, texSize, THREE.RGBAFormat, THREE.FloatType);
+  positionTexture.magFilter = THREE.NearestFilter;
+  positionTexture.minFilter = THREE.NearestFilter;
+  positionTexture.needsUpdate = true;
 
-    in vec2 vUv;
+  // Shuffle the palette
+  palette.sort(() => Math.random() - 0.5);
+  flattened = [];
+  for (const c of palette) flattened.push(c.r, c.g, c.b);
 
-    void main() {
-      vec4 posVel = texture2D(positionTexture, vUv);
-      vec2 uvIndex = vUv * float(texSize);
-      int index = int(floor(uvIndex.y)) * texSize + int(floor(uvIndex.x));
-
-      // Compute force...
-      vec2 forceSum = vec2(0.0000);
-      for (int j = 0; j < numParticles; j++) {
-        // forceSum += vec2(0.0001); // Initialize force sum
-        if (j == index) continue; // Skip self
-        float jx = mod(float(j), float(texSize)) / float(texSize);
-        float jy = floor(float(j) / float(texSize)) / float(texSize);
-        vec4 other = texture2D(positionTexture, vec2(jx, jy));
-
-        float d = length(other.xy - posVel.xy);
-        
-        if (d == 0.) continue; // Avoid division by zero
-        float F = forceArray[(index % numTypes) * numTypes + (j % numTypes)];
-        vec2 dir = normalize(other.xy - posVel.xy);
-        
-        float f = ((2.0 * (F + U)) / (R * R)) * d * d + ((-4.0 * (F + 0.5 * U)) / R) * d + U;
-        f *= exp(-d / R); // smooth, long-tail decay
-
-        forceSum += dir * C * f;        
+  // --- Compute Shader ---
+  computeMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      positionTexture: { value: positionTexture },
+      forceArray: { value: forceArray },
+      texSize: { value: texSize },
+      palette: { value: new Float32Array(flattened) },
+      numTypes: { value: TYPE_COUNT },
+      numParticles: { value: N },
+      U: { value: UNIVERSAL_REPULSION },
+      R: { value: INTERACTION_RANGE },
+      C: { value: FORCE_CONSTANT },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
+    `,
+    fragmentShader: `
+      precision highp float;
 
-      vec2 velocity = posVel.zw;
-      velocity = velocity * 0.96 + forceSum; // Add inertia and damping
-      posVel.xy += velocity;
-      posVel.zw = velocity;
+      uniform sampler2D positionTexture;
+      uniform float forceArray[64];
+      uniform float U;
+      uniform float R;
+      uniform float C;
+      uniform int texSize;
+      uniform vec3 palette[7];
+      uniform int numTypes;
+      uniform int numParticles;
 
-      // Wrap around edges, with slight offset to avoid edge artifacts, wrap around [-1.1, 1.1]
-      posVel.xy = mod(posVel.xy + 1.1, 2.2) - 1.1;
+      in vec2 vUv;
 
-      gl_FragColor = posVel;
-    }
-  `,
-});
+      void main() {
+        vec4 posVel = texture2D(positionTexture, vUv);
+        vec2 uvIndex = vUv * float(texSize);
+        int index = int(floor(uvIndex.y)) * texSize + int(floor(uvIndex.x));
 
-const computeMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), computeMaterial);
-let computeScene = new THREE.Scene();
-computeScene.add(computeMesh);
+        // Compute force...
+        vec2 forceSum = vec2(0.0000);
+        for (int j = 0; j < numParticles; j++) {
+          // forceSum += vec2(0.0001); // Initialize force sum
+          if (j == index) continue; // Skip self
+          float jx = mod(float(j), float(texSize)) / float(texSize);
+          float jy = floor(float(j) / float(texSize)) / float(texSize);
+          vec4 other = texture2D(positionTexture, vec2(jx, jy));
 
-// Initialize UVs for final rendering
-const uvs = new Float32Array(N * 2);
-for (let i = 0; i < N; i++) {
-  const x = i % texSize;
-  const y = Math.floor(i / texSize);
-  uvs[i * 2] = x / texSize;
-  uvs[i * 2 + 1] = y / texSize;
+          float d = length(other.xy - posVel.xy);
+          
+          if (d == 0.) continue; // Avoid division by zero
+          float F = forceArray[(index % numTypes) * numTypes + (j % numTypes)];
+          vec2 dir = normalize(other.xy - posVel.xy);
+          
+          float f = ((2.0 * (F + U)) / (R * R)) * d * d + ((-4.0 * (F + 0.5 * U)) / R) * d + U;
+          f *= exp(-d / R); // smooth, long-tail decay
+
+          forceSum += dir * C * f;        
+        }
+
+        vec2 velocity = posVel.zw;
+        velocity = velocity * 0.96 + forceSum; // Add inertia and damping
+        posVel.xy += velocity;
+        posVel.zw = velocity;
+
+        // Wrap around edges, with slight offset to avoid edge artifacts, wrap around [-1.1, 1.1]
+        posVel.xy = mod(posVel.xy + 1.1, 2.2) - 1.1;
+
+        gl_FragColor = posVel;
+      }
+    `,
+  });
+
+  computeMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), computeMaterial);
+  computeScene = new THREE.Scene();
+  computeScene.add(computeMesh);
+
+  // Initialize UVs for final rendering
+  uvs = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) {
+    const x = i % texSize;
+    const y = Math.floor(i / texSize);
+    uvs[i * 2] = x / texSize;
+    uvs[i * 2 + 1] = y / texSize;
+  }
+
+  renderGeometry = new THREE.BufferGeometry();
+  renderGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  renderGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); // dummy, not used
+
+  // --- Display the texture in main scene ---
+  renderMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      positionTexture: { value: renderTarget1.texture },
+      texSize: { value: texSize },
+      palette: { value: new Float32Array(flattened) },
+      numTypes: { value: TYPE_COUNT },
+      particleSize: { value: particleSize },
+    },
+    vertexShader: `
+      precision highp float;
+
+      uniform sampler2D positionTexture;
+      uniform float texSize;            // Assume square texture
+      uniform vec3 palette[7];
+      uniform float numTypes;           // Change to float to avoid int modulo issues
+      uniform float particleSize;
+
+      varying vec3 vColor;
+      varying vec2 vUv;
+
+      void main() {
+          vec2 uvIndex = uv * texSize;
+
+          // Calculate the 1D index from UV (flattened 2D index)
+          float index = floor(uvIndex.y) * texSize + floor(uvIndex.x);
+
+          // Compute lookup coordinates in normalized texture coordinates
+          float x = mod(index, texSize);
+          float y = floor(index / texSize);
+          vec2 texCoord = (vec2(x, y) + 0.5) / texSize;
+
+          vec4 pos = texture2D(positionTexture, texCoord);
+
+          // Use mod with floats to determine palette index
+          float paletteIndex = mod(index, numTypes);
+          int intPaletteIndex = int(floor(paletteIndex));
+          vColor = palette[intPaletteIndex];
+
+          gl_Position = vec4(pos.xy, 0.0, 1.0);
+          gl_PointSize = particleSize;
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+      varying vec3 vColor;
+
+      void main() {
+        vec2 coord = gl_PointCoord * 2.0 - 1.0; // remap to [-1, 1]
+        float dist = dot(coord, coord); // squared distance from center
+
+        if (dist > 1.0) discard; // outside circle = transparent
+
+        pc_fragColor = vec4(vColor, 1.0);
+      }
+    `,
+  });
+
+  renderPoints = new THREE.Points(renderGeometry, renderMaterial);
+  renderScene = new THREE.Scene();
+  renderScene.add(renderPoints);
 }
-
-let renderGeometry = new THREE.BufferGeometry();
-renderGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-renderGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); // dummy, not used
-
-// --- Display the texture in main scene ---
-const renderMaterial = new THREE.ShaderMaterial({
-  uniforms: {
-    positionTexture: { value: renderTarget1.texture },
-    texSize: { value: texSize },
-    palette: { value: new Float32Array(flattened) },
-    numTypes: { value: TYPE_COUNT },
-    particleSize: { value: particleSize },
-  },
-  vertexShader: `
-    precision highp float;
-
-    uniform sampler2D positionTexture;
-    uniform float texSize;            // Assume square texture
-    uniform vec3 palette[7];
-    uniform float numTypes;           // Change to float to avoid int modulo issues
-    uniform float particleSize;
-
-    varying vec3 vColor;
-    varying vec2 vUv;
-
-    void main() {
-        vec2 uvIndex = uv * texSize;
-
-        // Calculate the 1D index from UV (flattened 2D index)
-        float index = floor(uvIndex.y) * texSize + floor(uvIndex.x);
-
-        // Compute lookup coordinates in normalized texture coordinates
-        float x = mod(index, texSize);
-        float y = floor(index / texSize);
-        vec2 texCoord = (vec2(x, y) + 0.5) / texSize;
-
-        vec4 pos = texture2D(positionTexture, texCoord);
-
-        // Use mod with floats to determine palette index
-        float paletteIndex = mod(index, numTypes);
-        int intPaletteIndex = int(floor(paletteIndex));
-        vColor = palette[intPaletteIndex];
-
-        gl_Position = vec4(pos.xy, 0.0, 1.0);
-        gl_PointSize = particleSize;
-    }
-  `,
-  fragmentShader: `
-    precision highp float;
-    varying vec3 vColor;
-
-    void main() {
-      vec2 coord = gl_PointCoord * 2.0 - 1.0; // remap to [-1, 1]
-      float dist = dot(coord, coord); // squared distance from center
-
-      if (dist > 1.0) discard; // outside circle = transparent
-
-      pc_fragColor = vec4(vColor, 1.0);
-    }
-  `,
-});
-
-let renderPoints = new THREE.Points(renderGeometry, renderMaterial);
-const renderScene = new THREE.Scene();
-renderScene.add(renderPoints);
 
 function animate() {
   requestAnimationFrame(animate);
@@ -286,11 +317,6 @@ function animate() {
   // Run GPU computation
   renderer.setRenderTarget(renderTarget1);
   renderer.render(computeScene, camera);
-
-  // Console log 
-  // const stats = computeTextureStats(renderer, renderTarget1);
-  // console.log('Mean:', stats.mean);
-  // console.log('Variance:', stats.variance);
 
   // Render the computed positions to the screen
   renderMaterial.uniforms.positionTexture.value = renderTarget1.texture;
@@ -305,48 +331,12 @@ function animate() {
   computeMaterial.uniforms.positionTexture.value = renderTarget2.texture;
 }
 
+document.getElementById('resetBtnUI').onclick = () => {
+  initialize();
+};
+
+initialize();
 animate();
-
-function computeTextureStats(renderer, renderTarget) {
-  const gl = renderer.getContext();
-  const width = renderTarget.width;
-  const height = renderTarget.height;
-
-  // Determine buffer type based on texture format
-  const textureType = renderTarget.texture.type;
-
-  const isFloat = textureType === THREE.FloatType || textureType === THREE.HalfFloatType;
-  const PixelArrayType = isFloat ? Float32Array : Uint8Array;
-
-  // Allocate buffer for pixels
-  const pixelBuffer = new PixelArrayType(width * height * 4);
-
-  // Bind the render target for reading
-  renderer.setRenderTarget(renderTarget);
-  gl.readPixels(0, 0, width, height, gl.RGBA, isFloat ? gl.FLOAT : gl.UNSIGNED_BYTE, pixelBuffer);
-  renderer.setRenderTarget(null); // Reset
-
-  // Compute mean and variance
-  const numPixels = width * height;
-  const sums = [0, 0, 0, 0];       // For R, G, B, A
-  const sumsSq = [0, 0, 0, 0];     // For variance
-
-  for (let i = 0; i < numPixels; i++) {
-    for (let c = 0; c < 4; c++) {
-      const value = pixelBuffer[i * 4 + c];
-      sums[c] += value;
-      sumsSq[c] += value * value;
-    }
-  }
-
-  const means = sums.map(sum => sum / numPixels);
-  const variances = sumsSq.map((sumSq, c) => (sumSq / numPixels) - (means[c] ** 2));
-
-  return {
-    mean: { r: means[0], g: means[1], b: means[2], a: means[3] },
-    variance: { r: variances[0], g: variances[1], b: variances[2], a: variances[3] }
-  };
-}
 </script>
 </body>
 </html>
