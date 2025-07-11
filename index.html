@@ -47,14 +47,14 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
 let N = 16000;
 const texSize = Math.ceil(Math.sqrt(N));
 let TYPE_COUNT = 8;
-const UNIVERSAL_REPULSION = .000005;
-const INTERACTION_RANGE = .020;
+const UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
+const INTERACTION_RANGE = .040 * Math.random() + .040; // Default interaction range for attraction/repulsion
 const FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
 const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles around (0, 0)
 let particleSize = 10.0; // Default particle size
 
 // --- Setup basic Three.js scene ---
-const context = document.getElementById('glcanvas').getContext('webgl2') 
+const context = document.getElementById('glcanvas').getContext('webgl2', { powerPreference: 'high-performance' }) 
   || document.getElementById('glcanvas').getContext('webgl')
   || document.getElementById('glcanvas').getContext('experimental-webgl');
 
