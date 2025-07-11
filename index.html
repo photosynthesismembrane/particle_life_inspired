@@ -89,7 +89,7 @@ const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles ar
 let particleSize = 10.0; // Default particle size
 
 // --- Setup basic Three.js scene ---
-const context = document.getElementById('glcanvas').getContext('webgl1');
+const context = document.getElementById('glcanvas').getContext('webgl2') || document.getElementById('glcanvas').getContext('webgl');
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('glcanvas'), context: context });
 
 renderer.setSize(window.innerWidth, window.innerHeight);
