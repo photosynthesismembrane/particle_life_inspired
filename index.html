@@ -44,7 +44,12 @@ window.addEventListener("unhandledrejection", function (event) {
 
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
 
-let N = 16000;
+function isMobileDevice() {
+  return /Mobi|Android|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(navigator.userAgent);
+}
+
+let N = isMobileDevice() ? 8000 : 12000;
+
 const texSize = Math.ceil(Math.sqrt(N));
 let TYPE_COUNT = 8;
 const UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
