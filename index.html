@@ -51,11 +51,10 @@ function isMobileDevice() {
 let N = isMobileDevice() ? 8000 : 12000;
 
 const texSize = Math.ceil(Math.sqrt(N));
-let TYPE_COUNT = 8;
+let TYPE_COUNT = Math.floor(Math.random() * 7) + 2; // Random number of types between 2 and 8
 const UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
 const INTERACTION_RANGE = .040 * Math.random() + .040; // Default interaction range for attraction/repulsion
 const FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
-const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles around (0, 0)
 let particleSize = 10.0; // Default particle size
 
 // --- Setup basic Three.js scene ---
@@ -123,6 +122,8 @@ const palette = [
   new THREE.Color('#4b60d4'), // Pantone 2726 C (Blue)
   new THREE.Color('#a72cb1'), // Pantone 253 C (Purple)
 ];
+// Shuffle the palette
+palette.sort(() => Math.random() - 0.5);
 const flattened = [];
 for (const c of palette) flattened.push(c.r, c.g, c.b);
 
