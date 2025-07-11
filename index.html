@@ -5,39 +5,6 @@
   <title>Multi-Type Particle Simulation</title>
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
-
-    #matrixGrid {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      background: #2c003e;
-      color: #fff;
-      padding: 10px;
-      border-radius: 6px;
-      font-size: 12px;
-      z-index: 10;
-    }
-    #matrixGrid table {
-      border-collapse: collapse;
-    }
-    #matrixGrid td {
-      border: 1px solid #666;
-      padding: 2px;
-    }
-    #matrixGrid input {
-      width: 50px;
-      background: #400060;
-      color: #fff;
-      border: 1px solid #888;
-    }
-    #matrixGrid button {
-      margin: 4px 2px;
-      padding: 2px 6px;
-      background: #600080;
-      color: #fff;
-      border: none;
-      cursor: pointer;
-    }
   </style>
 </head>
 <body>
@@ -56,8 +23,6 @@
     display: none;
     z-index: 9999;
   "></div>
-
-<div id="matrixGrid"></div>
 <canvas id="glcanvas"></canvas>
 
 <script type="module">
@@ -79,12 +44,12 @@ window.addEventListener("unhandledrejection", function (event) {
 
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
 
-let N = 12000;
+let N = 16000;
 const texSize = Math.ceil(Math.sqrt(N));
 let TYPE_COUNT = 8;
 const UNIVERSAL_REPULSION = .000005;
 const INTERACTION_RANGE = .020;
-const FORCE_CONSTANT = 0.000005; // Default force constant for attraction/repulsion
+const FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
 const UNIVERSAL_CENTERING_FORCE = 0.001; // Default force to center particles around (0, 0)
 let particleSize = 10.0; // Default particle size
 
@@ -376,86 +341,6 @@ function computeTextureStats(renderer, renderTarget) {
     variance: { r: variances[0], g: variances[1], b: variances[2], a: variances[3] }
   };
 }
-
-
-// Build the GUI matrix grid with particle controls
-function buildMatrixGrid() {
-  const grid = document.getElementById('matrixGrid');
-  grid.innerHTML = '';
-  const table = document.createElement('table');
-
-  const header = document.createElement('tr');
-  const topLeft = document.createElement('td');
-  topLeft.textContent = '→↓';
-  header.appendChild(topLeft);
-  for (let j = 0; j < TYPE_COUNT; j++) {
-    const cell = document.createElement('td');
-    cell.textContent = j;
-    header.appendChild(cell);
-  }
-  table.appendChild(header);
-
-  for (let i = 0; i < TYPE_COUNT; i++) {
-    const row = document.createElement('tr');
-    const label = document.createElement('td');
-    label.textContent = i;
-    row.appendChild(label);
-    for (let j = 0; j < TYPE_COUNT; j++) {
-      const cell = document.createElement('td');
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.step = '0.01'; // Optional: allows precise decimal input
-      input.value = forceArray[i * TYPE_COUNT + j].toFixed(2);
-      input.onchange = (e) => {
-        forceArray[i * TYPE_COUNT + j] = parseFloat(e.target.value);
-      };
-      cell.appendChild(input);
-      row.appendChild(cell);
-    }
-    table.appendChild(row);
-  }
-
-  const controlRow = document.createElement('tr');
-  const controlCell = document.createElement('td');
-  controlCell.colSpan = TYPE_COUNT + 1;
-  controlCell.innerHTML = `Types: <input id="typeInput" type="number" value="${TYPE_COUNT}" style="width:40px;">
-    Particles: <input id="countInput" type="number" value="${N}" style="width:60px;">
-    Size: <input id="sizeInput" type="number" value="${particleSize}" style="width:40px;">
-    <button id="resetButton">Reset</button> <button id="randomizeButton">Randomize Forces</button>`;
-  table.appendChild(controlRow);
-  controlRow.appendChild(controlCell);
-
-  grid.appendChild(table);
-
-  document.getElementById('sizeInput').onchange = (e) => {
-    particleSize = parseInt(e.target.value);
-  };
-
-  document.getElementById('resetButton').onclick = () => {
-    resetParticles();
-  };
-
-  document.getElementById('randomizeButton').onclick = () => {
-    for (let i = 0; i < TYPE_COUNT; i++) {
-      for (let j = 0; j < TYPE_COUNT; j++) {
-        forceArray[i * TYPE_COUNT + j] = (Math.random()*2. - 1.);
-      }
-    }
-    buildMatrixGrid();
-    resetParticles();
-  };
-
-  document.getElementById('typeInput').onchange = (e) => {
-    TYPE_COUNT = parseInt(e.target.value);
-    initSimulation();
-  };
-
-  document.getElementById('countInput').onchange = (e) => {
-    N = parseInt(e.target.value);
-    initSimulation();
-  };
-}
-
 </script>
 </body>
 </html>
