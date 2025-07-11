@@ -48,7 +48,7 @@ function isMobileDevice() {
   return /Mobi|Android|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(navigator.userAgent);
 }
 
-let N = isMobileDevice() ? 8000 : 12000;
+let N = isMobileDevice() ? 6000 : 12000;
 
 const texSize = Math.ceil(Math.sqrt(N));
 let TYPE_COUNT = Math.floor(Math.random() * 7) + 2; // Random number of types between 2 and 8
