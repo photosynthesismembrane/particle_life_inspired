@@ -124,10 +124,10 @@ let computeMaterial, computeMesh, computeScene;
 let uvs, renderGeometry, renderMaterial, renderPoints, renderScene;
 
 function initialize() {
-  TYPE_COUNT = Math.floor(Math.random() * 7) + 2; // Random number of types between 2 and 8
-  UNIVERSAL_REPULSION = -.5 * Math.random() - .05; // Default universal repulsion force
-  INTERACTION_RANGE = .040 * Math.random() + .040; // Default interaction range for attraction/repulsion
-  FORCE_CONSTANT = 0.00001 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
+  TYPE_COUNT = Math.floor(Math.random() * 6) + 3; // Random number of types between 3 and 8
+  UNIVERSAL_REPULSION = -.08 * Math.random() - .01; // Default universal repulsion force
+  INTERACTION_RANGE = .0080 * Math.random() + .0040; // Default interaction range for attraction/repulsion
+  FORCE_CONSTANT = 0.0008 * Math.random() + 0.00001; // Default force constant for attraction/repulsion
 
   // Create force matrix as a flat array for GPU computation
   forceArray = new Float32Array(TYPE_COUNT * TYPE_COUNT);
@@ -166,6 +166,7 @@ function initialize() {
       palette: { value: new Float32Array(flattened) },
       numTypes: { value: TYPE_COUNT },
       numParticles: { value: N },
+      dimensions: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
       U: { value: UNIVERSAL_REPULSION },
       R: { value: INTERACTION_RANGE },
       C: { value: FORCE_CONSTANT },
@@ -189,6 +190,7 @@ function initialize() {
       uniform vec3 palette[7];
       uniform int numTypes;
       uniform int numParticles;
+      uniform vec2 dimensions;
 
       in vec2 vUv;
 
@@ -198,19 +200,19 @@ function initialize() {
         int index = int(floor(uvIndex.y)) * texSize + int(floor(uvIndex.x));
 
         // Compute force...
-        vec2 forceSum = vec2(0.0000);
+        vec2 forceSum = vec2(0.0);
         for (int j = 0; j < numParticles; j++) {
-          // forceSum += vec2(0.0001); // Initialize force sum
           if (j == index) continue; // Skip self
           float jx = mod(float(j), float(texSize)) / float(texSize);
           float jy = floor(float(j) / float(texSize)) / float(texSize);
           vec4 other = texture2D(positionTexture, vec2(jx, jy));
 
-          float d = length(other.xy - posVel.xy);
+          vec2 delta = mod((other.xy - posVel.xy + dimensions*.5) + 1.0, 2.0) - 1.0; // Wrap around edges
+          float d = length(delta);
           
           if (d == 0.) continue; // Avoid division by zero
           float F = forceArray[(index % numTypes) * numTypes + (j % numTypes)];
-          vec2 dir = normalize(other.xy - posVel.xy);
+          vec2 dir = normalize(delta);
           
           float f = ((2.0 * (F + U)) / (R * R)) * d * d + ((-4.0 * (F + 0.5 * U)) / R) * d + U;
           f *= exp(-d / R); // smooth, long-tail decay
@@ -223,8 +225,8 @@ function initialize() {
         posVel.xy += velocity;
         posVel.zw = velocity;
 
-        // Wrap around edges, with slight offset to avoid edge artifacts, wrap around [-1.1, 1.1]
-        posVel.xy = mod(posVel.xy + 1.1, 2.2) - 1.1;
+        // Wrap around edges, with slight offset to avoid edge artifacts, wrap around [-1.0, 1.0]
+        posVel.xy = mod(posVel.xy + 1.0, 2.0) - 1.0;
 
         gl_FragColor = posVel;
       }
